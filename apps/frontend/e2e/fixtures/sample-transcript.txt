@@ -1,0 +1,19 @@
+Interview Transcript
+Candidate: QA Export Test
+Date: 2026-05-10
+Interviewer: Sarah Johnson
+
+Interviewer: Can you walk me through your experience with backend development?
+Candidate: I have 5 years of experience building REST APIs with Node.js and Express. I've worked extensively with PostgreSQL and used ORMs like Prisma and Sequelize.
+
+Interviewer: How do you handle authentication in your applications?
+Candidate: I typically implement JWT-based authentication with refresh token rotation. I make sure to hash passwords with bcrypt and validate tokens on every protected route.
+
+Interviewer: Describe a challenging technical problem you solved recently.
+Candidate: We had a performance issue where our API was timing out under load. I profiled the queries and found N+1 problems in our ORM calls. I added eager loading and database indexes, which reduced response times by 80%.
+
+Interviewer: How do you approach code quality and testing?
+Candidate: I practice test-driven development, writing unit tests before implementation. I use Jest or Vitest for unit tests and Playwright for end-to-end testing. I also enforce code review processes with my team.
+
+Interviewer: Where do you see yourself in 3 years?
+Candidate: I'd like to grow into a tech lead role, mentoring junior developers while still staying hands-on with architecture decisions. I'm particularly interested in distributed systems and improving developer tooling.

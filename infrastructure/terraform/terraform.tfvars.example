@@ -1,0 +1,38 @@
+# terraform.tfvars.example
+# Copy to terraform.tfvars and fill in real values before running terraform apply.
+# NEVER commit terraform.tfvars — it contains secrets. It is in .gitignore.
+#
+# Two deployment modes:
+#
+# MODE 1 — CloudFront default URL (no custom domain, no DNS setup required)
+#   Leave domain_name and acm_certificate_arn as empty strings.
+#   The app will be reachable at https://<cloudfront-id>.cloudfront.net immediately after apply.
+#
+# MODE 2 — Custom domain
+#   Set both domain_name and acm_certificate_arn.
+#   The ACM certificate must be in us-east-1 and validated before apply.
+#   After apply, create a CNAME from domain_name → cloudfront_domain output value.
+
+# ─── AWS Provider ────────────────────────────────────────────────────────────
+aws_region   = "us-east-1"
+project_name = "solo-mode"
+
+# ─── Lightsail Instance ───────────────────────────────────────────────────────
+lightsail_blueprint = "ubuntu_22_04"
+lightsail_bundle    = "nano_3_0" # $3.50/mo — 512 MB RAM, 20 GB SSD
+
+# ─── GitHub Repo (for Lightsail clone) ───────────────────────────────────────
+github_repo = "gorillalogic/solo-mode"
+
+# ─── Domain (MODE 1 — CloudFront default URL) ────────────────────────────────
+domain_name         = ""
+acm_certificate_arn = ""
+
+# ─── Domain (MODE 2 — Custom domain, comment out MODE 1 lines above) ─────────
+# domain_name         = "recruitment.example.com"
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# ─── Backend Secrets (REQUIRED) ──────────────────────────────────────────────
+database_url      = "postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres"
+jwt_secret        = "your-secure-random-jwt-secret-min-32-chars"
+anthropic_api_key = "sk-ant-..."

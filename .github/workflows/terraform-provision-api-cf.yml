@@ -1,0 +1,45 @@
+name: Terraform — Provision API CloudFront (targeted)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  provision-api-cf:
+    name: Terraform Apply — API CloudFront only
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::995603457880:role/gha-aisdlc-deploy-role
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init -reconfigure
+        working-directory: infrastructure/terraform
+
+      - name: Terraform Apply (API CloudFront only)
+        run: |
+          terraform apply -auto-approve \
+            -target=aws_cloudfront_distribution.api \
+            -var="runner_registration_token=unused"
+        working-directory: infrastructure/terraform
+        env:
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+          TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_backend_s3_access_key_id: ${{ secrets.BACKEND_S3_ACCESS_KEY_ID }}
+          TF_VAR_backend_s3_secret_access_key: ${{ secrets.BACKEND_S3_SECRET_ACCESS_KEY }}
+          TF_VAR_github_repo: "gorillalogic/edgar-solo-mode"
+
+      - name: Terraform Output
+        run: terraform output
+        working-directory: infrastructure/terraform

@@ -1,0 +1,16 @@
+LinkedIn Profile Export
+=======================
+Name: QA Test Candidate
+Headline: Senior Software Engineer
+Location: San Francisco, CA
+
+Experience:
+- Senior Engineer at Tech Corp (2020 - Present)
+  Led development of microservices architecture serving 1M+ users.
+- Software Engineer at Startup Inc (2017 - 2020)
+  Built full-stack features using React and Node.js.
+
+Education:
+- B.S. Computer Science, State University (2013 - 2017)
+
+Skills: JavaScript, TypeScript, React, Node.js, PostgreSQL, AWS

@@ -1,0 +1,51 @@
+# OS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+
+# Uploaded candidate files — no PII committed (NF-03b)
+apps/backend/uploads/
+
+# Local runtime/dev artifacts
+apps/backend/uploads/
+apps/frontend/.vite/
+apps/frontend/playwright-report/
+apps/frontend/test-results/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.test
+
+# IDE/editor
+.idea/
+.vscode/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+terraform.tfvars
+.mcp.json

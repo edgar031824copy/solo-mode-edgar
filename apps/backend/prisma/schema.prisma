@@ -1,0 +1,109 @@
+// apps/backend/prisma/schema.prisma
+// Prisma 7.x: datasource url is configured via prisma.config.ts for migrate.
+// The PrismaPg adapter handles the actual DB connection at runtime.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Recruiter {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("recruiters")
+}
+
+// ─── Candidate ────────────────────────────────────────────────────────────────
+// Central entity. One candidate per upload session.
+// Status progresses: pending → pre_screened → decided
+// Cascade delete: onDelete: Cascade on all child relations ensures that
+// deleting a Candidate in one Prisma call removes all related records.
+
+model Candidate {
+  id               String          @id @default(uuid())
+  name             String
+  email            String?
+  position         String?
+  notes            String?
+
+  // File metadata — filenames stored on record per F-02; actual files on disk
+  cvFileName       String?
+  linkedinFileName String?
+
+  // Status lifecycle
+  status           CandidateStatus @default(pending)
+
+  // F-29: async error signal — written on background pre/post-screening failure; cleared on each new run
+  preScreeningError String?
+
+  // Relations — cascaded on delete so DELETE /candidates/:id is one call
+  preScreening     PreScreening?
+  postScreening    PostScreening?
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@map("candidates")
+}
+
+enum CandidateStatus {
+  pending
+  pre_screened
+  decided
+}
+
+// ─── PreScreening ─────────────────────────────────────────────────────────────
+// Populated by Epic 3 (POST /candidates/:id/pre-screen).
+// Defined here so the FK is available from Epic 2 onward.
+
+model PreScreening {
+  id                     String    @id @default(uuid())
+  candidateId            String    @unique
+  candidate              Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  // Raw JSON blob from Claude — structured per Epic 3 Anthropic output shape
+  profileSummary         String?
+  redFlagsJson           String?   // JSON array, parsed at read time
+  interviewQuestionsJson String?   // JSON array, parsed at read time
+  overallFit             Int?      // 1–5
+
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@map("pre_screenings")
+}
+
+// ─── PostScreening ────────────────────────────────────────────────────────────
+// Populated by Epic 4 (POST /candidates/:id/post-screen).
+// Defined here so the FK is available from Epic 2 onward.
+
+model PostScreening {
+  id                   String                 @id @default(uuid())
+  candidateId          String                 @unique
+  candidate            Candidate              @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  transcriptFileName   String?               // uploaded interview transcript filename
+  aiRecommendation     PostScreeningDecision?
+  recruiterChoice      PostScreeningDecision?
+  // true = recruiter confirmed AI; false = recruiter overrode AI
+  isOverride           Boolean?
+  reasoningJson        String?               // Claude reasoning blob, JSON
+
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@map("post_screenings")
+}
+
+enum PostScreeningDecision {
+  pass
+  no_pass
+}

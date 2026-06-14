@@ -1,0 +1,66 @@
+name: Terraform Provision
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_registration_token:
+        description: "GHA runner registration token (gh api -X POST repos/gorillalogic/edgar-solo-mode/actions/runners/registration-token --jq .token)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  provision:
+    name: Terraform Apply (company AWS account)
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::995603457880:role/gha-aisdlc-deploy-role
+          aws-region: us-east-1
+
+      - name: Install Terraform
+        run: |
+          if ! command -v terraform &>/dev/null; then
+            TERRAFORM_VERSION="1.7.5"
+            curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/terraform.zip
+            unzip -o /tmp/terraform.zip -d /tmp
+            sudo mv /tmp/terraform /usr/local/bin/terraform
+            chmod +x /usr/local/bin/terraform
+          fi
+          terraform version
+
+      - name: Terraform Init
+        working-directory: infrastructure/terraform
+        run: terraform init -reconfigure
+
+      - name: Terraform Apply
+        working-directory: infrastructure/terraform
+        env:
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+          TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_runner_registration_token: ${{ inputs.runner_registration_token }}
+          TF_VAR_backend_s3_access_key_id: ${{ secrets.BACKEND_S3_ACCESS_KEY_ID }}
+          TF_VAR_backend_s3_secret_access_key: ${{ secrets.BACKEND_S3_SECRET_ACCESS_KEY }}
+          TF_VAR_github_repo: "gorillalogic/edgar-solo-mode"
+        run: |
+          terraform apply -auto-approve \
+            -var="runner_registration_token=${{ inputs.runner_registration_token }}"
+
+      - name: Print Terraform Outputs
+        working-directory: infrastructure/terraform
+        run: |
+          echo "=== Terraform Outputs ==="
+          echo "lightsail_ip=$(terraform output -raw lightsail_ip)"
+          echo "cloudfront_domain=$(terraform output -raw cloudfront_domain)"
+          echo "frontend_bucket=$(terraform output -raw frontend_bucket)"
+          echo "cloudfront_distribution_id=$(terraform output -raw cloudfront_distribution_id)"
+          echo "api_cloudfront_domain=$(terraform output -raw api_cloudfront_domain)"

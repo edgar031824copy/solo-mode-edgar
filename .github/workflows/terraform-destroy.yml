@@ -1,0 +1,53 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'destroy' to confirm full infrastructure teardown"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    name: Terraform Destroy (company AWS account)
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Safety gate
+        run: |
+          if [ "${{ inputs.confirm }}" != "destroy" ]; then
+            echo "Confirmation input does not match 'destroy'. Aborting."
+            exit 1
+          fi
+          echo "Confirmation accepted — proceeding with terraform destroy."
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::995603457880:role/gha-aisdlc-deploy-role
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: infrastructure/terraform
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: infrastructure/terraform
+        env:
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+          TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          TF_VAR_runner_registration_token: "placeholder-not-used-for-destroy"
+          TF_VAR_backend_s3_access_key_id: ${{ secrets.BACKEND_S3_ACCESS_KEY_ID }}
+          TF_VAR_backend_s3_secret_access_key: ${{ secrets.BACKEND_S3_SECRET_ACCESS_KEY }}
+        run: terraform destroy -auto-approve

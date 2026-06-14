@@ -1,0 +1,242 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'prisma/**'
+      - '.github/workflows/**'
+      - 'infrastructure/**'
+  workflow_dispatch:
+    inputs:
+      restart_only:
+        description: 'If true, only restart PM2 via systemd (skip npm ci and build)'
+        type: boolean
+        default: false
+
+# Tests run locally via pre-push git hook before every push.
+# Deploy jobs run on the self-hosted Lightsail runner — zero GitHub-hosted minutes consumed.
+
+jobs:
+  # ─── Deploy backend to Lightsail (runs directly on the instance) ───────────
+  deploy-backend:
+    name: Deploy Backend (Lightsail)
+    runs-on: self-hosted
+
+    steps:
+      - name: Quick PM2 restart (restart_only mode)
+        if: ${{ inputs.restart_only == true }}
+        run: |
+          # Try systemd service first; fall back to direct pm2 start if service not registered
+          if sudo systemctl is-enabled pm2-ubuntu 2>/dev/null; then
+            sudo systemctl restart pm2-ubuntu || true
+          else
+            echo "pm2-ubuntu service not found — starting PM2 directly"
+            export PATH="$PATH:/usr/local/bin:/usr/bin"
+            pm2 restart /home/ubuntu/solo-mode/apps/backend/ecosystem.config.cjs 2>/dev/null \
+              || pm2 start /home/ubuntu/solo-mode/apps/backend/ecosystem.config.cjs || true
+          fi
+          sleep 5
+          for i in $(seq 1 15); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health 2>/dev/null || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend healthy"; exit 0; fi
+            sleep 3
+          done
+          echo "Backend did not come up — check PM2 logs on the instance"
+          exit 1
+
+      - name: Ensure swap exists (prevents OOM on 512MB instance)
+        if: ${{ inputs.restart_only != true }}
+        run: |
+          if [ ! -f /swapfile ]; then
+            sudo fallocate -l 1G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+            echo "Swap created"
+          else
+            sudo swapon /swapfile 2>/dev/null || true
+            echo "Swap already exists"
+          fi
+
+      - name: Kill any stray npm/node processes and clean locks
+        if: ${{ inputs.restart_only != true }}
+        run: |
+          # Kill any lingering npm processes from previous cancelled runs
+          pkill -f "npm ci" 2>/dev/null || true
+          pkill -f "npm install" 2>/dev/null || true
+          # Clear npm lock files that may block a new npm ci
+          rm -f ~/.npm/_locks/*.lock 2>/dev/null || true
+          # Clear npm cache to avoid corrupted state from killed installs
+          npm cache clean --force 2>/dev/null || true
+          # Remove production node_modules — ensures a clean install on the next npm ci
+          rm -rf /home/ubuntu/solo-mode/apps/backend/node_modules
+          echo "Cleanup done"
+
+      - uses: actions/checkout@v4
+        if: ${{ inputs.restart_only != true }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.restart_only != true }}
+        with:
+          node-version: '22'
+
+      - name: Cache backend node_modules
+        if: ${{ inputs.restart_only != true }}
+        uses: actions/cache@v4
+        with:
+          path: apps/backend/node_modules
+          key: backend-node-${{ runner.os }}-${{ hashFiles('apps/backend/package-lock.json') }}
+          restore-keys: backend-node-${{ runner.os }}-
+
+      - name: Install backend dependencies
+        if: ${{ inputs.restart_only != true }}
+        run: npm ci
+        working-directory: apps/backend
+
+      - name: Generate Prisma client
+        if: ${{ inputs.restart_only != true }}
+        run: npx prisma generate
+        working-directory: apps/backend
+
+      - name: Build backend (TypeScript compile)
+        if: ${{ inputs.restart_only != true }}
+        run: npm run build
+        working-directory: apps/backend
+
+      - name: Sync built files to app directory
+        if: ${{ inputs.restart_only != true }}
+        run: |
+          mkdir -p /home/ubuntu/solo-mode/apps/backend
+          rsync -av --delete \
+            --exclude='node_modules' \
+            ${{ github.workspace }}/apps/backend/ \
+            /home/ubuntu/solo-mode/apps/backend/
+
+      - name: Write production environment variables
+        if: ${{ inputs.restart_only != true }}
+        run: |
+          # Write /etc/environment (used by system-level processes)
+          printf 'NODE_ENV=production\nPORT=3000\n' | sudo tee /etc/environment > /dev/null
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" | sudo tee -a /etc/environment > /dev/null
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" | sudo tee -a /etc/environment > /dev/null
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" | sudo tee -a /etc/environment > /dev/null
+          echo "AWS_UPLOADS_BUCKET=${{ secrets.AWS_UPLOADS_BUCKET }}" | sudo tee -a /etc/environment > /dev/null
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}" | sudo tee -a /etc/environment > /dev/null
+          echo "BACKEND_S3_ACCESS_KEY_ID=${{ secrets.BACKEND_S3_ACCESS_KEY_ID }}" | sudo tee -a /etc/environment > /dev/null
+          echo "BACKEND_S3_SECRET_ACCESS_KEY=${{ secrets.BACKEND_S3_SECRET_ACCESS_KEY }}" | sudo tee -a /etc/environment > /dev/null
+          echo "CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}" | sudo tee -a /etc/environment > /dev/null
+          # Write .env file directly in the production app directory.
+          # The backend loads this via "import dotenv/config" at startup, so dotenv
+          # always picks up the latest secret values regardless of PM2's env snapshot.
+          mkdir -p /home/ubuntu/solo-mode/apps/backend
+          printf 'NODE_ENV=production\nPORT=3000\n' > /home/ubuntu/solo-mode/apps/backend/.env
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "AWS_UPLOADS_BUCKET=${{ secrets.AWS_UPLOADS_BUCKET }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "BACKEND_S3_ACCESS_KEY_ID=${{ secrets.BACKEND_S3_ACCESS_KEY_ID }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "BACKEND_S3_SECRET_ACCESS_KEY=${{ secrets.BACKEND_S3_SECRET_ACCESS_KEY }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          echo "CORS_ORIGIN=${{ secrets.CORS_ORIGIN }}" >> /home/ubuntu/solo-mode/apps/backend/.env
+          chmod 600 /home/ubuntu/solo-mode/apps/backend/.env
+
+      - name: Install production deps, migrate, restart PM2
+        if: ${{ inputs.restart_only != true }}
+        run: |
+          npm install -g pm2
+          cd /home/ubuntu/solo-mode/apps/backend
+          npm ci --omit=dev
+          npx prisma generate
+          DATABASE_URL="${{ secrets.DATABASE_URL }}" npx prisma migrate deploy
+          # Register PM2 with systemd so the process is owned by systemd (PID 1),
+          # not by the GitHub Actions runner process group.
+          # Step 1: Configure the startup script (creates /etc/systemd/system/pm2-ubuntu.service)
+          env PATH="$PATH:/usr/bin:/usr/local/bin" pm2 startup systemd -u ubuntu --hp /home/ubuntu | tail -1 | sudo bash || true
+          # Step 2: Start the app under the runner-owned pm2 first so we can save the process list
+          # Source /etc/environment so --update-env picks up CORS_ORIGIN and other secrets
+          set -a; source /etc/environment; set +a
+          pm2 restart ecosystem.config.cjs --update-env || pm2 start ecosystem.config.cjs
+          pm2 save
+          # Step 3: Kill the runner-owned PM2 daemon — it will be orphan-killed by runner cleanup anyway
+          pm2 kill || true
+          # Step 4: Start PM2 via systemd — now it's owned by systemd, not the runner
+          sudo systemctl enable pm2-ubuntu 2>/dev/null || true
+          sudo systemctl restart pm2-ubuntu || true
+          # Step 5: Wait for backend to come up and verify
+          for i in $(seq 1 15); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health 2>/dev/null || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend healthy via systemd-managed PM2"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Backend did not come up after 15 attempts"
+          exit 1
+
+  # ─── Deploy frontend to S3 + CloudFront ────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend (S3 + CloudFront)
+    runs-on: self-hosted
+    needs: [deploy-backend]
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/frontend
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::995603457880:role/gha-aisdlc-deploy-role
+          aws-region: us-east-1
+
+      - name: Install AWS CLI v2 (if missing)
+        run: |
+          if ! command -v aws &>/dev/null; then
+            sudo apt-get install -y unzip curl
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            sudo /tmp/aws/install
+            rm -rf /tmp/awscliv2.zip /tmp/aws
+          fi
+
+      - name: Sync assets to S3 (long-lived cache for hashed files)
+        run: |
+          aws s3 sync apps/frontend/dist/ s3://${{ secrets.FRONTEND_BUCKET }} \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "index.html"
+
+      - name: Upload index.html with no-cache headers
+        run: |
+          aws s3 cp apps/frontend/dist/index.html \
+            s3://${{ secrets.FRONTEND_BUCKET }}/index.html \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --content-type "text/html"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
